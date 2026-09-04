@@ -1,22 +1,16 @@
 import os
-import io
 import asyncio
 import traceback
 import discord
 from discord import app_commands
 from discord.ext import commands
-from PIL import Image
 from google import genai
 from google.genai import types
 
 DISCORD_TOKEN = os.getenv("TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-# ================================
-# ОГРАНИЧЕНИЕ ПО КАНАЛУ
-# Если хочешь привязать к одному каналу — вставь его ID вместо 0.
-# Если 0 — бот отвечает везде.
-# ================================
+# 0 — отвечать везде, либо ID нужного канала
 ALLOWED_CHANNEL_ID = 0
 
 gemini_client = None
@@ -49,14 +43,14 @@ async def on_ready():
         print(f"Ошибка синхронизации: {e}")
 
 # ================================
-# КОМАНДА: /спросить
+# КОМАНДА: /слышь
 # ================================
-@bot.tree.command(name="спросить", description="Задать вопрос нейросети Gemini")
-@app_commands.describe(вопрос="Твой вопрос")
-async def ask_gemini(interaction: discord.Interaction, вопрос: str):
+@bot.tree.command(name="слышь", description="Пояснить за вопрос")
+@app_commands.describe(базар="Чё хотел?")
+async def hear_me_out(interaction: discord.Interaction, базар: str):
     if ALLOWED_CHANNEL_ID != 0 and interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
-            f"🚫 Не спамь тут. Иди в <#{ALLOWED_CHANNEL_ID}> и там спрашивай.", 
+            f"🚫 Не спамь тут. Иди в <#{ALLOWED_CHANNEL_ID}> и там возникай.", 
             ephemeral=True
         )
         return
@@ -64,20 +58,21 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     await interaction.response.defer(thinking=True)
 
     if not gemini_client:
-        await interaction.followup.send("❌ Переменная GEMINI_API_KEY не найдена на хостинге!")
+        await interaction.followup.send("❌ GEMINI_API_KEY потерялся где-то на хостинге.")
         return
 
     loop = asyncio.get_running_loop()
     response = None
     last_error = ""
 
+    # До 3 попыток на актуальной gemini-3.6-flash
     for attempt in range(3):
         try:
             response = await loop.run_in_executor(
                 None,
                 lambda: gemini_client.models.generate_content(
                     model="gemini-3.6-flash",
-                    contents=вопрос,
+                    contents=базар,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT
                     )
@@ -87,7 +82,7 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
                 break
         except Exception as e:
             last_error = str(e)
-            print(f"Попытка {attempt + 1} споткнулась: {last_error}")
+            print(f"Попытка {attempt + 1}: {last_error}")
             if "503" in last_error or "429" in last_error:
                 await asyncio.sleep(2)
                 continue
@@ -97,87 +92,18 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     if response and response.text:
         answer = response.text
         if len(answer) <= 1900:
-            await interaction.followup.send(f"**Вопрос:** {вопрос}\n\n{answer}")
+            await interaction.followup.send(f"**Ты выдал:** {базар}\n\n{answer}")
         else:
-            await interaction.followup.send(f"**Вопрос:** {вопрос}\n\n{answer[:1900]}")
+            await interaction.followup.send(f"**Ты выдал:** {базар}\n\n{answer[:1900]}")
             for i in range(1900, len(answer), 1900):
                 await interaction.channel.send(answer[i:i+1900])
         return
 
     if "503" in last_error:
-        await interaction.followup.send("🤖💤 Сервера лежат, мозги плавятся. Отвали на пару минут.")
+        await interaction.followup.send("🤖💤 Серваки у гугла в мыле. Отвали на пару минут.")
     elif "429" in last_error:
-        await interaction.followup.send("⏳ Слишком много строчишь, притормози.")
+        await interaction.followup.send("⏳ Слишком резво строчишь, притормози.")
     else:
         await interaction.followup.send(f"⚠️ Чёт пошло не так:\n```{last_error[:1800]}```")
-
-# ================================
-# КОМАНДА: /арт
-# ================================
-@bot.tree.command(name="арт", description="Сгенерировать картинку")
-@app_commands.describe(промпт="Что нарисовать?")
-async def generate_art(interaction: discord.Interaction, промпт: str):
-    if ALLOWED_CHANNEL_ID != 0 and interaction.channel_id != ALLOWED_CHANNEL_ID:
-        await interaction.response.send_message(
-            f"🚫 Не спамь тут. Иди в <#{ALLOWED_CHANNEL_ID}> и там рисуй.", 
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(thinking=True)
-
-    if not gemini_client:
-        await interaction.followup.send("❌ Переменная GEMINI_API_KEY не найдена на хостинге!")
-        return
-
-    try:
-        loop = asyncio.get_running_loop()
-        
-        # Генерация картинок в Gemini 3.x через родной generate_content
-        response = await loop.run_in_executor(
-            None,
-            lambda: gemini_client.models.generate_content(
-                model="gemini-3.1-flash-image",
-                contents=промпт,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
-                )
-            )
-        )
-
-        image_data = None
-        if hasattr(response, "parts") and response.parts:
-            for part in response.parts:
-                if getattr(part, "inline_data", None):
-                    image_data = part.inline_data.data
-                    break
-
-        if not image_data and hasattr(response, "candidates") and response.candidates:
-            cand = response.candidates[0]
-            if hasattr(cand, "content") and hasattr(cand.content, "parts"):
-                for part in cand.content.parts:
-                    if getattr(part, "inline_data", None):
-                        image_data = part.inline_data.data
-                        break
-
-        if not image_data:
-            await interaction.followup.send("🚫 Не удалось сгенерировать изображение (возможно, цензура запроса).")
-            return
-
-        buffer = io.BytesIO(image_data)
-        buffer.seek(0)
-
-        file = discord.File(fp=buffer, filename="art.png")
-        await interaction.followup.send(f"🎨 **Запрос:** {промпт}", file=file)
-
-    except Exception as e:
-        err_msg = str(e)
-        print(f"Ошибка арт: {traceback.format_exc()}")
-        if "503" in err_msg:
-            await interaction.followup.send("🎨💤 Сервер картинок перегружен. Попробуй позже.")
-        elif "429" in err_msg:
-            await interaction.followup.send("⏳ Лимит на картинки исчерпан, подожди немного.")
-        else:
-            await interaction.followup.send(f"⚠️ Ошибка генерации:\n```{err_msg[:1800]}```")
 
 bot.run(DISCORD_TOKEN)
