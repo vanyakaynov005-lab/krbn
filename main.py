@@ -12,6 +12,13 @@ from google.genai import types
 DISCORD_TOKEN = os.getenv("TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
+# ================================
+# ОГРАНИЧЕНИЕ ПО КАНАЛУ
+# Если хочешь привязать к одному каналу — вставь его ID вместо 0.
+# Если 0 — бот отвечает везде.
+# ================================
+ALLOWED_CHANNEL_ID = 0
+
 gemini_client = None
 if GEMINI_KEY:
     gemini_client = genai.Client(
@@ -47,6 +54,13 @@ async def on_ready():
 @bot.tree.command(name="спросить", description="Задать вопрос нейросети Gemini")
 @app_commands.describe(вопрос="Твой вопрос")
 async def ask_gemini(interaction: discord.Interaction, вопрос: str):
+    if ALLOWED_CHANNEL_ID != 0 and interaction.channel_id != ALLOWED_CHANNEL_ID:
+        await interaction.response.send_message(
+            f"🚫 Не спамь тут. Иди в <#{ALLOWED_CHANNEL_ID}> и там спрашивай.", 
+            ephemeral=True
+        )
+        return
+
     await interaction.response.defer(thinking=True)
 
     if not gemini_client:
@@ -57,7 +71,7 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     response = None
     last_error = ""
 
-    # Делаем до 3 попыток на gemini-3.6-flash, если сервера Гугла штормит
+    # До 3 попыток на gemini-3.6-flash с паузой при временных сбоях
     for attempt in range(3):
         try:
             response = await loop.run_in_executor(
@@ -104,6 +118,13 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
 @bot.tree.command(name="арт", description="Сгенерировать картинку")
 @app_commands.describe(промпт="Что нарисовать?")
 async def generate_art(interaction: discord.Interaction, промпт: str):
+    if ALLOWED_CHANNEL_ID != 0 and interaction.channel_id != ALLOWED_CHANNEL_ID:
+        await interaction.response.send_message(
+            f"🚫 Не спамь тут. Иди в <#{ALLOWED_CHANNEL_ID}> и там рисуй.", 
+            ephemeral=True
+        )
+        return
+
     await interaction.response.defer(thinking=True)
 
     if not gemini_client:
@@ -114,34 +135,39 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: gemini_client.models.generate_images(
+            lambda: gemini_client.models.generate_image(
                 model="imagen-3.0-generate-002",
                 prompt=промпт,
-                config=types.GenerateImagesConfig(
+                config=dict(
                     number_of_images=1,
+                    output_mime_type="image/jpeg",
                     aspect_ratio="1:1"
                 )
             )
         )
 
-        if not result.generated_images:
-            await interaction.followup.send("🚫 Картинку отклонил фильтр безопасности.")
+        image_data = None
+        if hasattr(result, "generated_images") and result.generated_images:
+            image_data = result.generated_images[0].image.image_bytes
+        elif hasattr(result, "image") and result.image:
+            image_data = result.image.image_bytes
+
+        if not image_data:
+            await interaction.followup.send("🚫 Не удалось получить изображение (возможно, цензура промпта).")
             return
 
-        img_bytes = result.generated_images[0].image.image_bytes
-        img = Image.open(io.BytesIO(img_bytes))
-
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
+        buffer = io.BytesIO(image_data)
         buffer.seek(0)
 
-        file = discord.File(fp=buffer, filename="art.png")
+        file = discord.File(fp=buffer, filename="art.jpg")
         await interaction.followup.send(f"🎨 **Запрос:** {промпт}", file=file)
 
     except Exception as e:
         err_msg = str(e)
         print(f"Ошибка арт: {traceback.format_exc()}")
-        if "503" in err_msg:
+        if "Enterprise" in err_msg or "not supported" in err_msg:
+            await interaction.followup.send("🚫 Google заблочил вызов генератора Imagen на обычном ключе Developer API.")
+        elif "503" in err_msg:
             await interaction.followup.send("🎨💤 Сервер картинок перегружен. Попробуй позже.")
         else:
             await interaction.followup.send(f"⚠️ Ошибка генерации:\n```{err_msg[:1800]}```")
