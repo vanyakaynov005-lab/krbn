@@ -12,10 +12,12 @@ from google.genai import types
 DISCORD_TOKEN = os.getenv("TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-# Инициализируем клиент
 gemini_client = None
 if GEMINI_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_KEY.strip())
+    gemini_client = genai.Client(
+        api_key=GEMINI_KEY.strip(),
+        http_options={"base_url": "https://generativelanguage.googleapis.com"}
+    )
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -29,10 +31,13 @@ async def on_ready():
     except Exception as e:
         print(f"Ошибка синхронизации: {e}")
 
+# ================================
+# КОМАНДА: /спросить
+# ================================
 @bot.tree.command(name="спросить", description="Задать вопрос нейросети Gemini")
 @app_commands.describe(вопрос="Твой вопрос")
 async def ask_gemini(interaction: discord.Interaction, вопрос: str):
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
 
     if not gemini_client:
         await interaction.followup.send("❌ Переменная GEMINI_API_KEY не найдена на хостинге!")
@@ -61,10 +66,13 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
         print(f"Ошибка: {traceback.format_exc()}")
         await interaction.followup.send(f"❌ Ошибка от Google API:\n```{err_msg[:1800]}```")
 
+# ================================
+# КОМАНДА: /арт
+# ================================
 @bot.tree.command(name="арт", description="Сгенерировать картинку")
 @app_commands.describe(промпт="Что нарисовать?")
 async def generate_art(interaction: discord.Interaction, промпт: str):
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
 
     if not gemini_client:
         await interaction.followup.send("❌ Переменная GEMINI_API_KEY не найдена на хостинге!")
@@ -104,4 +112,3 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
         await interaction.followup.send(f"❌ Ошибка Imagen:\n```{err_msg[:1800]}```")
 
 bot.run(DISCORD_TOKEN)
-)
