@@ -57,14 +57,13 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     response = None
     last_error = ""
 
-    models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash"]
-
-    for model_name in models_to_try:
+    # Делаем до 3 попыток на gemini-3.6-flash, если сервера Гугла штормит
+    for attempt in range(3):
         try:
             response = await loop.run_in_executor(
                 None,
-                lambda m=model_name: gemini_client.models.generate_content(
-                    model=m,
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.6-flash",
                     contents=вопрос,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT
@@ -75,8 +74,9 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
                 break
         except Exception as e:
             last_error = str(e)
-            print(f"Модель {model_name} споткнулась: {last_error}")
+            print(f"Попытка {attempt + 1} споткнулась: {last_error}")
             if "503" in last_error or "429" in last_error:
+                await asyncio.sleep(2)
                 continue
             else:
                 break
