@@ -71,7 +71,6 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     response = None
     last_error = ""
 
-    # До 3 попыток на gemini-3.6-flash с паузой при временных сбоях
     for attempt in range(3):
         try:
             response = await loop.run_in_executor(
@@ -133,42 +132,51 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
 
     try:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
+        
+        # Генерация картинок в Gemini 3.x через родной generate_content
+        response = await loop.run_in_executor(
             None,
-            lambda: gemini_client.models.generate_image(
-                model="imagen-3.0-generate-002",
-                prompt=промпт,
-                config=dict(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio="1:1"
+            lambda: gemini_client.models.generate_content(
+                model="gemini-3.1-flash-image",
+                contents=промпт,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
                 )
             )
         )
 
         image_data = None
-        if hasattr(result, "generated_images") and result.generated_images:
-            image_data = result.generated_images[0].image.image_bytes
-        elif hasattr(result, "image") and result.image:
-            image_data = result.image.image_bytes
+        if hasattr(response, "parts") and response.parts:
+            for part in response.parts:
+                if getattr(part, "inline_data", None):
+                    image_data = part.inline_data.data
+                    break
+
+        if not image_data and hasattr(response, "candidates") and response.candidates:
+            cand = response.candidates[0]
+            if hasattr(cand, "content") and hasattr(cand.content, "parts"):
+                for part in cand.content.parts:
+                    if getattr(part, "inline_data", None):
+                        image_data = part.inline_data.data
+                        break
 
         if not image_data:
-            await interaction.followup.send("🚫 Не удалось получить изображение (возможно, цензура промпта).")
+            await interaction.followup.send("🚫 Не удалось сгенерировать изображение (возможно, цензура запроса).")
             return
 
         buffer = io.BytesIO(image_data)
         buffer.seek(0)
 
-        file = discord.File(fp=buffer, filename="art.jpg")
+        file = discord.File(fp=buffer, filename="art.png")
         await interaction.followup.send(f"🎨 **Запрос:** {промпт}", file=file)
 
     except Exception as e:
         err_msg = str(e)
         print(f"Ошибка арт: {traceback.format_exc()}")
-        if "Enterprise" in err_msg or "not supported" in err_msg:
-            await interaction.followup.send("🚫 Google заблочил вызов генератора Imagen на обычном ключе Developer API.")
-        elif "503" in err_msg:
+        if "503" in err_msg:
             await interaction.followup.send("🎨💤 Сервер картинок перегружен. Попробуй позже.")
+        elif "429" in err_msg:
+            await interaction.followup.send("⏳ Лимит на картинки исчерпан, подожди немного.")
         else:
             await interaction.followup.send(f"⚠️ Ошибка генерации:\n```{err_msg[:1800]}```")
 
