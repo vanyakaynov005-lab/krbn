@@ -43,29 +43,52 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
         await interaction.followup.send("❌ Переменная GEMINI_API_KEY не найдена на хостинге!")
         return
 
-    try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: gemini_client.models.generate_content(
-                model="gemini-3.6-flash",
-                
-                contents=вопрос
-            )
-        )
-        answer = response.text or "Ответ пустой"
+    loop = asyncio.get_running_loop()
+    response = None
+    last_error = ""
 
+    # Список моделей: сначала основная, потом запасная
+    models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash"]
+
+    for model_name in models_to_try:
+        try:
+            response = await loop.run_in_executor(
+                None,
+                lambda m=model_name: gemini_client.models.generate_content(
+                    model=m,
+                    contents=вопрос
+                )
+            )
+            if response and response.text:
+                break
+        except Exception as e:
+            last_error = str(e)
+            print(f"Модель {model_name} споткнулась: {last_error}")
+            # Если словили 503 (перегруз) или лимит — пробуем запасную
+            if "503" in last_error or "429" in last_error:
+                continue
+            else:
+                # Если ошибка другого типа (не перегруз), дальше не крутим
+                break
+
+    # Если ответ получен
+    if response and response.text:
+        answer = response.text
         if len(answer) <= 1900:
             await interaction.followup.send(f"**Вопрос:** {вопрос}\n\n{answer}")
         else:
             await interaction.followup.send(f"**Вопрос:** {вопрос}\n\n{answer[:1900]}")
             for i in range(1900, len(answer), 1900):
                 await interaction.channel.send(answer[i:i+1900])
+        return
 
-    except Exception as e:
-        err_msg = str(e)
-        print(f"Ошибка: {traceback.format_exc()}")
-        await interaction.followup.send(f"❌ Ошибка от Google API:\n```{err_msg[:1800]}```")
+    # Красивые ошибки вместо сырого кода
+    if "503" in last_error:
+        await interaction.followup.send("🤖💤 **Сервера Google сейчас перегружены.**\nСлишком много запросов, подожди пару минут и попробуй снова.")
+    elif "429" in last_error:
+        await interaction.followup.send("⏳ **Слишком частые запросы.**\nУпёрлись в минутный лимит, дай боту перекурить полминуты.")
+    else:
+        await interaction.followup.send(f"⚠️ **Что-то пошло не так:**\n```{last_error[:1800]}```")
 
 # ================================
 # КОМАНДА: /арт
@@ -94,7 +117,7 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
         )
 
         if not result.generated_images:
-            await interaction.followup.send("❌ Не удалось получить картинку (фильтр безопасности).")
+            await interaction.followup.send("🚫 Картинку отклонил фильтр безопасности.")
             return
 
         img_bytes = result.generated_images[0].image.image_bytes
@@ -110,6 +133,9 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
     except Exception as e:
         err_msg = str(e)
         print(f"Ошибка арт: {traceback.format_exc()}")
-        await interaction.followup.send(f"❌ Ошибка Imagen:\n```{err_msg[:1800]}```")
+        if "503" in err_msg:
+            await interaction.followup.send("🎨💤 **Сервер генерации картинок перегружен.** Попробуй чуть позже.")
+        else:
+            await interaction.followup.send(f"⚠️ **Ошибка генерации:**\n```{err_msg[:1800]}```")
 
 bot.run(DISCORD_TOKEN)
