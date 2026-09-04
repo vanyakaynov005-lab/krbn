@@ -22,6 +22,16 @@ if GEMINI_KEY:
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ================================
+# НАСТРОЙКА ХАРАКТЕРА (ТЗ)
+# ================================
+SYSTEM_PROMPT = """
+Ты — острый на язык, дерзкий собеседник с черным юмором, сарказмом и иронией.
+Не будь вежливым шаблонным ботом, забудь про фразы вроде "Чем я могу вам помочь?".
+Отвечай резко, по делу, с подколами, троллингом к месту и современным сленгом/мемами.
+Короткие и ёмкие ответы, без лишних соплей.
+"""
+
 @bot.event
 async def on_ready():
     print(f"Бот запущен: {bot.user}")
@@ -47,7 +57,6 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
     response = None
     last_error = ""
 
-    # Список моделей: сначала основная, потом запасная
     models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash"]
 
     for model_name in models_to_try:
@@ -56,7 +65,10 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
                 None,
                 lambda m=model_name: gemini_client.models.generate_content(
                     model=m,
-                    contents=вопрос
+                    contents=вопрос,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT
+                    )
                 )
             )
             if response and response.text:
@@ -64,14 +76,11 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
         except Exception as e:
             last_error = str(e)
             print(f"Модель {model_name} споткнулась: {last_error}")
-            # Если словили 503 (перегруз) или лимит — пробуем запасную
             if "503" in last_error or "429" in last_error:
                 continue
             else:
-                # Если ошибка другого типа (не перегруз), дальше не крутим
                 break
 
-    # Если ответ получен
     if response and response.text:
         answer = response.text
         if len(answer) <= 1900:
@@ -82,13 +91,12 @@ async def ask_gemini(interaction: discord.Interaction, вопрос: str):
                 await interaction.channel.send(answer[i:i+1900])
         return
 
-    # Красивые ошибки вместо сырого кода
     if "503" in last_error:
-        await interaction.followup.send("🤖💤 **Сервера Google сейчас перегружены.**\nСлишком много запросов, подожди пару минут и попробуй снова.")
+        await interaction.followup.send("🤖💤 Сервера лежат, мозги плавятся. Отвали на пару минут.")
     elif "429" in last_error:
-        await interaction.followup.send("⏳ **Слишком частые запросы.**\nУпёрлись в минутный лимит, дай боту перекурить полминуты.")
+        await interaction.followup.send("⏳ Слишком много строчишь, притормози.")
     else:
-        await interaction.followup.send(f"⚠️ **Что-то пошло не так:**\n```{last_error[:1800]}```")
+        await interaction.followup.send(f"⚠️ Чёт пошло не так:\n```{last_error[:1800]}```")
 
 # ================================
 # КОМАНДА: /арт
@@ -134,8 +142,8 @@ async def generate_art(interaction: discord.Interaction, промпт: str):
         err_msg = str(e)
         print(f"Ошибка арт: {traceback.format_exc()}")
         if "503" in err_msg:
-            await interaction.followup.send("🎨💤 **Сервер генерации картинок перегружен.** Попробуй чуть позже.")
+            await interaction.followup.send("🎨💤 Сервер картинок перегружен. Попробуй позже.")
         else:
-            await interaction.followup.send(f"⚠️ **Ошибка генерации:**\n```{err_msg[:1800]}```")
+            await interaction.followup.send(f"⚠️ Ошибка генерации:\n```{err_msg[:1800]}```")
 
 bot.run(DISCORD_TOKEN)
